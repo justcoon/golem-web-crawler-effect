@@ -1,0 +1,70 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.5.0/golem.schema.json
+# Schema for vscode-yaml:
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.5.0/golem.schema.json
+
+# Field reference: https://learn.golem.cloud/app-manifest#field-reference
+# Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
+
+manifestVersion: 1.5.0
+
+app: golem-web-crawler-effect
+
+environments:
+  local:
+    server: local
+  cloud:
+    server: cloud
+components:
+  golem-web-crawler-effect:effect-main:
+    dir: ""
+    templates: effect
+    config:
+      db:
+        host: "{{ POSTGRES_HOST }}"
+        db: "{{ POSTGRES_DB }}"
+        port: "{{ POSTGRES_PORT }}"
+secretDefaults:
+  local:
+    db:
+      user: "{{ POSTGRES_USER }}"
+      password: "{{ POSTGRES_PASSWORD }}"
+    urlProcessing:
+      boostWords: ["/docs/", "/blog/", "/wiki/", "/article/"]
+      maxUrlLength: 200
+      crossDomainPolicy: "SubdomainsOnly"
+      normalizePrefixes: ["www"]
+      cacheTtlSeconds: 86400
+
+retryPolicyDefaults:
+  local:
+    http-fetch-retry:
+      priority: 15
+      predicate:
+        or:
+          - propEq: { property: "status-code", value: 0 }
+          - propIn:
+              property: "status-code"
+              values: [500, 501, 502, 503, 504, 505]
+      policy:
+        countBox:
+          maxRetries: 5
+          inner:
+            jitter:
+              factor: 0.15
+              inner:
+                clamp:
+                  minDelay: "200ms"
+                  maxDelay: "4s"
+                  inner:
+                    exponential:
+                      baseDelay: "200ms"
+                      factor: 2.0
+httpApi:
+  deployments:
+    local:
+    - domain: golem-web-crawler-effect.localhost:9006
+      agents:
+        OrchestratorAgent: {}
+        DomainCrawlerAgent: {}
+        SearchAgent: {}
