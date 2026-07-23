@@ -89,9 +89,7 @@ export const OrchestratorAgent = defineAgent({
             }
           }
 
-          const prefixes = yield* config.urlProcessing.normalizePrefixes.get.pipe(
-            Effect.map((v) => Redacted.value(v))
-          );
+          const prefixes = yield* config.urlProcessing.normalizePrefixes;
 
           const grouped = groupPrioritizedUrlsByNormalizedDomain(seeds, prefixes, (u) => ({
             url: u,

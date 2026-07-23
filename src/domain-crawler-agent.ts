@@ -1,8 +1,9 @@
-import { Effect, Ref, Schema, Redacted } from "effect";
+import { Effect, Ref, Schema, Redacted, Option } from "effect";
 import {
   defineAgent,
   method,
   Snapshot,
+  Http,
 } from "@golemcloud/effect-golem";
 import { HttpClient } from "effect/unstable/http";
 import { FetchHttpClient } from "effect/unstable/http";
@@ -262,6 +263,7 @@ export const DomainCrawlerAgent = defineAgent({
   mode: "durable",
   config: CrawlerConfig,
   constructorParams: { domainName: Schema.String },
+  http: Http.mount("/domains/{domainName}", { cors: ["*"] }),
   snapshot: Snapshot.define({
     schema: DomainState,
     policy: Snapshot.policy.everyN(10),
@@ -274,18 +276,22 @@ export const DomainCrawlerAgent = defineAgent({
     getState: method({
       params: {},
       success: DomainState,
+      http: [Http.get("/state")],
     }),
     setDelay: method({
       params: { delayMs: Schema.Number },
       success: Schema.Void,
+      http: [Http.post("/config/delay")],
     }),
     setCrossDomainPolicy: method({
       params: { policy: CrossDomainPolicy },
       success: Schema.Void,
+      http: [Http.post("/config/cross-domain-policy")],
     }),
     removeCrossDomainPolicy: method({
       params: {},
       success: Schema.Void,
+      http: [Http.del("/config/cross-domain-policy")],
     }),
     processNext: method({
       params: {},
@@ -422,11 +428,12 @@ export const DomainCrawlerAgent = defineAgent({
                 processedCount: s.processedCount + 1,
               }));
 
-              const maxUrlLen = yield* config.urlProcessing.maxUrlLength.get.pipe(Effect.map((v) => Redacted.value(v)));
-              const boostWords = yield* config.urlProcessing.boostWords.get.pipe(Effect.map((v) => Redacted.value(v)));
-              const normalizePrefixes = yield* config.urlProcessing.normalizePrefixes.get.pipe(Effect.map((v) => Redacted.value(v)));
-              const cacheTtl = yield* config.urlProcessing.cacheTtlSeconds.get.pipe(Effect.map((v) => Redacted.value(v)));
-              const configPolicyStr = yield* config.urlProcessing.crossDomainPolicy.get.pipe(Effect.map((v) => Redacted.value(v)));
+              const maxUrlLen = yield* config.urlProcessing.maxUrlLength;
+              const boostWords = yield* config.urlProcessing.boostWords;
+              const normalizePrefixes = yield* config.urlProcessing.normalizePrefixes;
+              const cacheTtlOpt = yield* config.urlProcessing.cacheTtlSeconds;
+              const cacheTtl = Option.getOrNull(cacheTtlOpt);
+              const configPolicyStr = yield* config.urlProcessing.crossDomainPolicy;
 
               const currentPolicy = stateVal.crossDomainPolicy !== null
                 ? stateVal.crossDomainPolicy

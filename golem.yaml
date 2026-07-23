@@ -24,17 +24,17 @@ components:
         host: "{{ POSTGRES_HOST }}"
         db: "{{ POSTGRES_DB }}"
         port: "{{ POSTGRES_PORT }}"
+      urlProcessing:
+        boostWords: ["/docs/", "/blog/", "/wiki/", "/article/"]
+        maxUrlLength: 200
+        crossDomainPolicy: "SubdomainsOnly"
+        normalizePrefixes: ["www"]
+        cacheTtlSeconds: 86400
 secretDefaults:
   local:
     db:
       user: "{{ POSTGRES_USER }}"
       password: "{{ POSTGRES_PASSWORD }}"
-    urlProcessing:
-      boostWords: ["/docs/", "/blog/", "/wiki/", "/article/"]
-      maxUrlLength: 200
-      crossDomainPolicy: "SubdomainsOnly"
-      normalizePrefixes: ["www"]
-      cacheTtlSeconds: 86400
 
 retryPolicyDefaults:
   local:
@@ -63,7 +63,7 @@ retryPolicyDefaults:
 httpApi:
   deployments:
     local:
-    - domain: golem-web-crawler-effect.localhost:9006
+    - domain: localhost:9006
       agents:
         OrchestratorAgent: {}
         DomainCrawlerAgent: {}

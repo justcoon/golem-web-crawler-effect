@@ -11,11 +11,11 @@ export class CrawlerConfig extends defineConfig("Crawler.Config", {
     password: Schema.Redacted(Schema.String),
   }),
   urlProcessing: Schema.Struct({
-    boostWords: Schema.Redacted(Schema.Array(Schema.String)),
-    maxUrlLength: Schema.Redacted(Schema.Number),
-    crossDomainPolicy: Schema.Redacted(Schema.String),
-    normalizePrefixes: Schema.Redacted(Schema.Array(Schema.String)),
-    cacheTtlSeconds: Schema.Redacted(Schema.Union([Schema.Null, Schema.Undefined, Schema.Number])),
+    boostWords: Schema.Array(Schema.String),
+    maxUrlLength: Schema.Number,
+    crossDomainPolicy: Schema.String,
+    normalizePrefixes: Schema.Array(Schema.String),
+    cacheTtlSeconds: Schema.Option(Schema.Number),
   }),
 }) {}
 
