@@ -17,6 +17,7 @@ import {
   isSubdomain,
   normalizeDomain,
   groupPrioritizedUrlsByDomain,
+  normalizeUrlDomain,
 } from "./common.js";
 import { FetcherAgent } from "./fetcher-agent.js";
 
@@ -433,6 +434,7 @@ export const DomainCrawlerAgent = defineAgent({
 
               const maxUrlLen = yield* config.urlProcessing.maxUrlLength;
               const boostWords = yield* config.urlProcessing.boostWords;
+              const normalizePrefixes = yield* config.urlProcessing.normalizePrefixes;
               const cacheTtlOpt = yield* config.urlProcessing.cacheTtlSeconds;
               const cacheTtl = Option.getOrNull(cacheTtlOpt);
               const configPolicyStr = yield* config.urlProcessing.crossDomainPolicy;
