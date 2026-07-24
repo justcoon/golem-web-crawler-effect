@@ -72,25 +72,27 @@ export function normalizeDomain(domain: string, normalizePrefixes: readonly stri
   return domainLower;
 }
 
+export function normalizeUrlDomain(urlStr: string, normalizePrefixes: readonly string[]): URL {
+  const parsed = new URL(urlStr);
+  parsed.hostname = normalizeDomain(parsed.hostname, normalizePrefixes);
+  return parsed;
+}
+
 export function isSubdomain(sub: string, parent: string): boolean {
   return sub === parent || sub.endsWith(`.${parent}`);
 }
 
-export function groupUrlsByNormalizedDomain(
-  urls: readonly string[],
-  normalizePrefixes: readonly string[]
-): Record<string, string[]> {
+export function groupUrlsByDomain(urls: readonly string[]): Record<string, string[]> {
   const grouped: Record<string, string[]> = {};
   for (const urlStr of urls) {
     try {
       const parsed = new URL(urlStr);
       const host = parsed.hostname;
       if (host) {
-        const normalized = normalizeDomain(host, normalizePrefixes);
-        if (!grouped[normalized]) {
-          grouped[normalized] = [];
+        if (!grouped[host]) {
+          grouped[host] = [];
         }
-        grouped[normalized].push(urlStr);
+        grouped[host].push(urlStr);
       }
     } catch {
       // ignore invalid URLs
@@ -99,12 +101,11 @@ export function groupUrlsByNormalizedDomain(
   return grouped;
 }
 
-export function groupPrioritizedUrlsByNormalizedDomain(
+export function groupPrioritizedUrlsByDomain(
   urls: readonly string[],
-  normalizePrefixes: readonly string[],
   prioritize: (url: string) => PrioritizedUrl
 ): Record<string, PrioritizedUrl[]> {
-  const groupedUrls = groupUrlsByNormalizedDomain(urls, normalizePrefixes);
+  const groupedUrls = groupUrlsByDomain(urls);
   const grouped: Record<string, PrioritizedUrl[]> = {};
   for (const [domain, urlsList] of Object.entries(groupedUrls)) {
     grouped[domain] = urlsList.map(prioritize);

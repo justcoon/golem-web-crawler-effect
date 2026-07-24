@@ -5,6 +5,7 @@ import {
   Snapshot,
   Http,
 } from "@golemcloud/effect-golem";
+import { Pg } from "@golemcloud/effect-golem/postgres";
 import { HttpClient } from "effect/unstable/http";
 import { FetchHttpClient } from "effect/unstable/http";
 import { SqlClient } from "effect/unstable/sql";
@@ -15,7 +16,8 @@ import {
   CrossDomainPolicy,
   isSubdomain,
   normalizeDomain,
-  groupPrioritizedUrlsByNormalizedDomain,
+  groupPrioritizedUrlsByDomain,
+  normalizeUrlDomain,
 } from "./common.js";
 import { FetcherAgent } from "./fetcher-agent.js";
 
@@ -234,22 +236,24 @@ function calculatePriority(urlStr: string, boostWords: readonly string[]): numbe
 }
 
 // Query uncrawled URLs using SqlClient
-const filterUncrawledUrls = (sql: SqlClient.SqlClient, urls: readonly string[], cacheTtlSeconds: number | null) =>
+const filterUncrawledUrls = (urls: readonly string[], cacheTtlSeconds: number | null) =>
   Effect.gen(function* () {
     if (urls.length === 0) return [];
     if (cacheTtlSeconds === 0) return urls;
+
+    const sql = yield* SqlClient.SqlClient;
 
     let crawledRows: readonly { url: string }[];
     if (cacheTtlSeconds !== null) {
       crawledRows = yield* sql<{ url: string }>`
         SELECT url FROM page_contents
-        WHERE url = ANY(${urls})
+        WHERE url = ANY(${Pg.array(urls)})
           AND saved_at > CURRENT_TIMESTAMP - CAST(${cacheTtlSeconds} || ' second' AS INTERVAL)
       `;
     } else {
       crawledRows = yield* sql<{ url: string }>`
         SELECT url FROM page_contents
-        WHERE url = ANY(${urls})
+        WHERE url = ANY(${Pg.array(urls)})
       `;
     }
 
@@ -443,30 +447,28 @@ export const DomainCrawlerAgent = defineAgent({
               for (const linkStr of result.extractedLinks) {
                 if (linkStr.length > maxUrlLen) continue;
                 try {
-                  const parsed = new URL(linkStr);
+                  const parsed = normalizeUrlDomain(linkStr, normalizePrefixes);
                   const domain = parsed.hostname;
                   let isAllowed = false;
                   if (currentPolicy === "None") {
-                    const normalizedDomain = normalizeDomain(domain, normalizePrefixes);
-                    isAllowed = normalizedDomain === stateVal.domain;
+                    isAllowed = domain === stateVal.domain;
                   } else if (currentPolicy === "SubdomainsOnly") {
                     isAllowed = isSubdomain(domain, stateVal.domain);
                   } else if (currentPolicy === "Any") {
                     isAllowed = true;
                   }
                   if (isAllowed) {
-                    candidateUrls.push(linkStr);
+                    candidateUrls.push(parsed.toString());
                   }
                 } catch {
                   // ignore
                 }
               }
 
-              const uncrawledUrls = yield* filterUncrawledUrls(sql, candidateUrls, cacheTtl ?? null);
+              const uncrawledUrls = yield* filterUncrawledUrls(candidateUrls, cacheTtl ?? null);
 
-              const groupedByDomain = groupPrioritizedUrlsByNormalizedDomain(
+              const groupedByDomain = groupPrioritizedUrlsByDomain(
                 uncrawledUrls,
-                normalizePrefixes,
                 (u) => ({
                   url: u,
                   priority: calculatePriority(u, boostWords),

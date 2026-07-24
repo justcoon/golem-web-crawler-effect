@@ -6,7 +6,7 @@ import {
 } from "@golemcloud/effect-golem";
 import { SqlClient } from "effect/unstable/sql";
 import { getSql, CrawlerConfig } from "./config.js";
-import { FilterType, LinkFilter, groupPrioritizedUrlsByNormalizedDomain } from "./common.js";
+import { FilterType, LinkFilter, groupPrioritizedUrlsByDomain, normalizeUrlDomain } from "./common.js";
 import { DomainCrawlerAgent } from "./domain-crawler-agent.js";
 
 export const DomainInfo = Schema.Struct({
@@ -91,7 +91,9 @@ export const OrchestratorAgent = defineAgent({
 
           const prefixes = yield* config.urlProcessing.normalizePrefixes;
 
-          const grouped = groupPrioritizedUrlsByNormalizedDomain(seeds, prefixes, (u) => ({
+          const normalizedSeeds = seeds.map((s) => normalizeUrlDomain(s, prefixes).toString());
+
+          const grouped = groupPrioritizedUrlsByDomain(normalizedSeeds, (u) => ({
             url: u,
             priority: 10,
           }));
