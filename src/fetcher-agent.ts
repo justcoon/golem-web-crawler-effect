@@ -141,6 +141,59 @@ function extractContent(baseUrl: string, body: string, activeFilters: readonly {
   return { title, extractedLinks };
 }
 
+const fetchPageContent = (url: string) =>
+  Effect.gen(function* () {
+    let currentUrl = url;
+    let redirectCount = 0;
+    const maxRedirects = 5;
+    let status = 0;
+    let body = "";
+    let finalUrl = url;
+
+    while (true) {
+      const request = HttpClientRequest.get(currentUrl).pipe(
+        HttpClientRequest.setHeader("Accept", "text/html"),
+        HttpClientRequest.setHeader("User-Agent", "golem-crawler/1.0")
+      );
+
+      const response = yield* HttpClient.execute(request).pipe(
+        Effect.provide(FetchHttpClient.layer)
+      );
+      status = response.status;
+
+      if (status >= 300 && status <= 399) {
+        if (redirectCount >= maxRedirects) {
+          return yield* Effect.fail({
+            _tag: "HttpFetchFailed" as const,
+            url: currentUrl,
+            statusCode: status,
+            message: "Too many redirects",
+          });
+        }
+        const location = response.headers["location"];
+        if (location) {
+          const nextUrl = resolveUrl(currentUrl, location);
+          if (!nextUrl) {
+            return yield* Effect.fail({
+              _tag: "InvalidUrl" as const,
+              url: location,
+              reason: "Invalid redirect location",
+            });
+          }
+          currentUrl = nextUrl;
+          redirectCount++;
+          continue;
+        }
+      }
+
+      body = yield* response.text;
+      finalUrl = currentUrl;
+      break;
+    }
+
+    return { body, finalUrl, status };
+  });
+
 export const FetcherAgent = defineAgent({
   name: "FetcherAgent",
   description: "Fetches and parses individual web pages",
@@ -162,53 +215,7 @@ export const FetcherAgent = defineAgent({
     return {
       fetchAndParse: ({ url }) =>
         Effect.gen(function* () {
-          let currentUrl = url;
-          let redirectCount = 0;
-          const maxRedirects = 5;
-          let status = 0;
-          let body = "";
-          let finalUrl = url;
-
-          while (true) {
-            const request = HttpClientRequest.get(currentUrl).pipe(
-              HttpClientRequest.setHeader("Accept", "text/html"),
-              HttpClientRequest.setHeader("User-Agent", "golem-crawler/1.0")
-            );
-            
-            const response = yield* HttpClient.execute(request).pipe(
-              Effect.provide(FetchHttpClient.layer)
-            );
-            status = response.status;
-            
-            if (status >= 300 && status <= 399) {
-              if (redirectCount >= maxRedirects) {
-                return yield* Effect.fail({
-                  _tag: "HttpFetchFailed" as const,
-                  url: currentUrl,
-                  statusCode: status,
-                  message: "Too many redirects",
-                });
-              }
-              const location = response.headers["location"];
-              if (location) {
-                const nextUrl = resolveUrl(currentUrl, location);
-                if (!nextUrl) {
-                  return yield* Effect.fail({
-                    _tag: "InvalidUrl" as const,
-                    url: location,
-                    reason: "Invalid redirect location",
-                  });
-                }
-                currentUrl = nextUrl;
-                redirectCount++;
-                continue;
-              }
-            }
-
-            body = yield* response.text;
-            finalUrl = currentUrl;
-            break;
-          }
+          const { status, body, finalUrl } = yield* fetchPageContent(url);
 
           const activeFilters = yield* sql<{ pattern: string; filter_type: string }>`
             SELECT pattern, filter_type FROM link_filters WHERE is_active = true
@@ -221,8 +228,6 @@ export const FetcherAgent = defineAgent({
             )
           );
 
-          const { title, extractedLinks } = extractContent(finalUrl, body, activeFilters);
-
           const prefixes = yield* config.urlProcessing.normalizePrefixes;
           const normalizedFinalUrl = normalizeUrlDomain(finalUrl, prefixes);
           const normalizedUrl = normalizeUrlDomain(url, prefixes);
@@ -230,6 +235,8 @@ export const FetcherAgent = defineAgent({
           const domain = normalizedFinalUrl.hostname;
           const finalUrlStr = normalizedFinalUrl.toString();
           const urlStr = normalizedUrl.toString();
+
+          const { title, extractedLinks } = extractContent(finalUrlStr, body, activeFilters);
 
           yield* sql`
             INSERT INTO page_contents (url, domain, title, http_status, raw_html, extracted_text)
