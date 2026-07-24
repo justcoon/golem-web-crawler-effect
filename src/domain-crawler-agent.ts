@@ -447,7 +447,7 @@ export const DomainCrawlerAgent = defineAgent({
               for (const linkStr of result.extractedLinks) {
                 if (linkStr.length > maxUrlLen) continue;
                 try {
-                  const parsed = normalizeUrlDomain(linkStr, normalizePrefixes);
+                  const parsed = new URL(linkStr);
                   const domain = parsed.hostname;
                   let isAllowed = false;
                   if (currentPolicy === "None") {
@@ -458,7 +458,7 @@ export const DomainCrawlerAgent = defineAgent({
                     isAllowed = true;
                   }
                   if (isAllowed) {
-                    candidateUrls.push(parsed.toString());
+                    candidateUrls.push(linkStr);
                   }
                 } catch {
                   // ignore
