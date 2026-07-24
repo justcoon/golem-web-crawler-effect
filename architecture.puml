@@ -1,0 +1,54 @@
+@startuml Golem Web Crawler Architecture
+
+' Define styles
+skinparam componentStyle uml2
+skinparam backgroundColor #F5F5F5
+skinparam defaultFontName Arial
+skinparam defaultFontSize 12
+skinparam roundcorner 10
+skinparam shadowing true
+skinparam ArrowColor #666666
+skinparam ComponentBackgroundColor #E8E8E8
+skinparam ComponentBorderColor #666666
+
+' Define external actors and services
+actor "Client / User" as user #FFD700
+
+package "Golem Cloud Platform" {
+    [HTTP API Gateway] as gateway #F9E79F
+    [OrchestratorAgent\n(Ephemeral)] as orchestrator #D6EAF8
+    [DomainCrawlerAgent\n(Durable, Per-Domain)] as crawler #D5F5E3
+    [FetcherAgent\n(Ephemeral)] as fetcher #FADBD8
+    [SearchAgent\n(Ephemeral)] as search #E8DAEF
+}
+
+package "External Resources" {
+    [PostgreSQL Database] as postgres #AED6F1
+    [Target Websites\n(HTTP / Robots.txt)] as websites #FDEBD0
+}
+
+' Force layout relationships
+gateway -[hidden]-> postgres
+
+' User requests
+user --> gateway : "HTTP Requests\n(Crawl / Search)"
+
+' Gateway routing
+gateway --> orchestrator : "RPC /mount: /crawler"
+gateway --> crawler : "RPC /mount: /domains/{domain}"
+gateway --> search : "RPC /mount: /search"
+
+' Agent Interactions
+orchestrator --> crawler : "Asynchronously triggers\nDomainCrawlerAgent::enqueue"
+orchestrator --> postgres : "Queries crawled domains &\nmanages link filters"
+
+crawler --> websites : "Fetches and parses robots.txt"
+crawler --> fetcher : "Spawns & calls fetch_and_parse"
+crawler --> crawler : "Self-schedules next step\nor routes cross-domain URLs"
+
+fetcher --> websites : "Fetches target web pages"
+fetcher --> postgres : "Queries active filters &\npersists crawled page data"
+
+search --> postgres : "Executes English Full-Text Search"
+
+@enduml

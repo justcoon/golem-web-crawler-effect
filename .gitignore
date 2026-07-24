@@ -1,0 +1,7 @@
+/golem-temp
+/node_modules
+.npm-cache
+
+.env
+.idea
+*.iml
