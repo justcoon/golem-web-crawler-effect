@@ -17,7 +17,6 @@ import {
   isSubdomain,
   normalizeDomain,
   groupPrioritizedUrlsByDomain,
-  normalizeUrlDomain,
 } from "./common.js";
 import { FetcherAgent } from "./fetcher-agent.js";
 
@@ -434,7 +433,6 @@ export const DomainCrawlerAgent = defineAgent({
 
               const maxUrlLen = yield* config.urlProcessing.maxUrlLength;
               const boostWords = yield* config.urlProcessing.boostWords;
-              const normalizePrefixes = yield* config.urlProcessing.normalizePrefixes;
               const cacheTtlOpt = yield* config.urlProcessing.cacheTtlSeconds;
               const cacheTtl = Option.getOrNull(cacheTtlOpt);
               const configPolicyStr = yield* config.urlProcessing.crossDomainPolicy;
@@ -447,7 +445,7 @@ export const DomainCrawlerAgent = defineAgent({
               for (const linkStr of result.extractedLinks) {
                 if (linkStr.length > maxUrlLen) continue;
                 try {
-                  const parsed = normalizeUrlDomain(linkStr, normalizePrefixes);
+                  const parsed = new URL(linkStr);
                   const domain = parsed.hostname;
                   let isAllowed = false;
                   if (currentPolicy === "None") {
@@ -458,7 +456,7 @@ export const DomainCrawlerAgent = defineAgent({
                     isAllowed = true;
                   }
                   if (isAllowed) {
-                    candidateUrls.push(parsed.toString());
+                    candidateUrls.push(linkStr);
                   }
                 } catch {
                   // ignore

@@ -10,7 +10,7 @@ import {
 } from "effect/unstable/http";
 import { SqlClient } from "effect/unstable/sql";
 import { getSql, CrawlerConfig } from "./config.js";
-import { FilterType, LinkFilter, PrioritizedUrl } from "./common.js";
+import { FilterType, LinkFilter, PrioritizedUrl, normalizeDomain, normalizeUrlDomain } from "./common.js";
 
 export const FetchResult = Schema.Struct({
   url: Schema.String,
@@ -157,6 +157,7 @@ export const FetcherAgent = defineAgent({
 }).implement(() =>
   Effect.gen(function* () {
     const sql = yield* getSql;
+    const config = yield* CrawlerConfig;
 
     return {
       fetchAndParse: ({ url }) =>
@@ -222,10 +223,17 @@ export const FetcherAgent = defineAgent({
 
           const { title, extractedLinks } = extractContent(finalUrl, body, activeFilters);
 
-          const domain = new URL(finalUrl).hostname;
+          const prefixes = yield* config.urlProcessing.normalizePrefixes;
+          const normalizedFinalUrl = normalizeUrlDomain(finalUrl, prefixes);
+          const normalizedUrl = normalizeUrlDomain(url, prefixes);
+
+          const domain = normalizedFinalUrl.hostname;
+          const finalUrlStr = normalizedFinalUrl.toString();
+          const urlStr = normalizedUrl.toString();
+
           yield* sql`
             INSERT INTO page_contents (url, domain, title, http_status, raw_html, extracted_text)
-            VALUES (${finalUrl}, ${domain}, ${title}, ${status}, ${body}, ${body})
+            VALUES (${finalUrlStr}, ${domain}, ${title}, ${status}, ${body}, ${body})
             ON CONFLICT (url) DO UPDATE SET
               domain = EXCLUDED.domain,
               title = EXCLUDED.title,
@@ -235,20 +243,22 @@ export const FetcherAgent = defineAgent({
               saved_at = CURRENT_TIMESTAMP
           `;
 
-          if (finalUrl !== url) {
-            const originalDomain = new URL(url).hostname;
+          if (finalUrlStr !== urlStr) {
+            const originalDomain = normalizedUrl.hostname;
             yield* sql`
               INSERT INTO page_contents (url, domain, title, http_status)
-              VALUES (${url}, ${originalDomain}, 'Redirect', ${status})
+              VALUES (${urlStr}, ${originalDomain}, 'Redirect', ${status})
               ON CONFLICT (url) DO NOTHING
             `;
           }
 
+          const normalizedLinks = extractedLinks.map((link) => normalizeUrlDomain(link, prefixes).toString());
+
           return {
-            url: finalUrl,
-            originalUrl: url,
+            url: finalUrlStr,
+            originalUrl: urlStr,
             title,
-            extractedLinks,
+            extractedLinks: normalizedLinks,
             status,
           };
         }).pipe(
