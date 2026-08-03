@@ -95,7 +95,37 @@ function isFiltered(urlStr: string, filters: readonly { pattern: string; filterT
   return false;
 }
 
-function extractContent(baseUrl: string, body: string, activeFilters: readonly { pattern: string; filterType: FilterType }[]): { title: string; extractedLinks: string[] } {
+function extractTextFromHtml(html: string): string {
+  let text = html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<svg[\s\S]*?<\/svg>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ");
+
+  text = text.replace(/<\/(p|div|h[1-6]|li|tr|blockquote|section|article|header|footer|nav)>/gi, "\n\n");
+  text = text.replace(/<br\s*\/?>/gi, "\n");
+  text = text.replace(/<\/td>/gi, " ");
+
+  text = text.replace(/<[^>]+>/g, " ");
+
+  text = text
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&#160;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'");
+
+  return text
+    .split("\n")
+    .map((line) => line.trim().replace(/[ \t]+/g, " "))
+    .filter((line) => line.length > 0)
+    .join("\n\n");
+}
+
+function extractContent(baseUrl: string, body: string, activeFilters: readonly { pattern: string; filterType: FilterType }[]): { title: string; extractedText: string; extractedLinks: string[] } {
   const titleMatch = body.match(/<title>(.*?)<\/title>/i);
   const title = titleMatch && titleMatch[1] ? titleMatch[1].trim() : "";
 
@@ -138,7 +168,9 @@ function extractContent(baseUrl: string, body: string, activeFilters: readonly {
     }
   }
 
-  return { title, extractedLinks };
+  const extractedText = extractTextFromHtml(body);
+
+  return { title, extractedText, extractedLinks };
 }
 
 const fetchPageContent = (url: string) =>
@@ -236,11 +268,11 @@ export const FetcherAgent = defineAgent({
           const finalUrlStr = normalizedFinalUrl.toString();
           const urlStr = normalizedUrl.toString();
 
-          const { title, extractedLinks } = extractContent(finalUrlStr, body, activeFilters);
+          const { title, extractedText, extractedLinks } = extractContent(finalUrlStr, body, activeFilters);
 
           yield* sql`
             INSERT INTO page_contents (url, domain, title, http_status, raw_html, extracted_text)
-            VALUES (${finalUrlStr}, ${domain}, ${title}, ${status}, ${body}, ${body})
+            VALUES (${finalUrlStr}, ${domain}, ${title}, ${status}, ${body}, ${extractedText})
             ON CONFLICT (url) DO UPDATE SET
               domain = EXCLUDED.domain,
               title = EXCLUDED.title,
