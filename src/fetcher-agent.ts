@@ -95,9 +95,55 @@ function isFiltered(urlStr: string, filters: readonly { pattern: string; filterT
   return false;
 }
 
-function extractContent(baseUrl: string, body: string, activeFilters: readonly { pattern: string; filterType: FilterType }[]): { title: string; extractedLinks: string[] } {
+function extractTextFromHtml(html: string): string {
+  let text = html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<svg[\s\S]*?<\/svg>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ");
+
+  text = text.replace(/<\/(p|div|h[1-6]|li|tr|blockquote|section|article|header|footer|nav)>/gi, "\n\n");
+  text = text.replace(/<br\s*\/?>/gi, "\n");
+  text = text.replace(/<\/td>/gi, " ");
+
+  text = text.replace(/<[^>]+>/g, " ");
+
+  text = text
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&#160;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'");
+
+  return text
+    .split("\n")
+    .map((line) => line.trim().replace(/[ \t]+/g, " "))
+    .filter((line) => line.length > 0)
+    .join("\n\n");
+}
+
+function extractContent(baseUrl: string, body: string, activeFilters: readonly { pattern: string; filterType: FilterType }[]): { title: string; extractedText: string; extractedLinks: string[]; canonicalUrl?: string } {
   const titleMatch = body.match(/<title>(.*?)<\/title>/i);
   const title = titleMatch && titleMatch[1] ? titleMatch[1].trim() : "";
+
+  let canonicalUrl: string | undefined = undefined;
+  const canonicalMatch = body.match(/<link\s+[^>]*rel=["']canonical["'][^>]*href=["']([^"']+)["']/i) ||
+                         body.match(/<link\s+[^>]*href=["']([^"']+)["'][^>]*rel=["']canonical["']/i);
+  if (canonicalMatch && canonicalMatch[1]) {
+    const resolved = resolveUrl(baseUrl, canonicalMatch[1].trim());
+    if (resolved) canonicalUrl = resolved;
+  }
+  if (!canonicalUrl) {
+    const ogMatch = body.match(/<meta\s+[^>]*property=["']og:url["'][^>]*content=["']([^"']+)["']/i) ||
+                    body.match(/<meta\s+[^>]*content=["']([^"']+)["'][^>]*property=["']og:url["']/i);
+    if (ogMatch && ogMatch[1]) {
+      const resolved = resolveUrl(baseUrl, ogMatch[1].trim());
+      if (resolved) canonicalUrl = resolved;
+    }
+  }
 
   const baseMatch = body.match(/<base\s+[^>]*href\s*=\s*["']([^"']+)["']/i);
   let resolvedBaseUrl = baseUrl;
@@ -138,17 +184,19 @@ function extractContent(baseUrl: string, body: string, activeFilters: readonly {
     }
   }
 
-  return { title, extractedLinks };
+  const extractedText = extractTextFromHtml(body);
+
+  return { title, extractedText, extractedLinks, canonicalUrl };
 }
 
-const fetchPageContent = (url: string) =>
+const fetchSingleUrl = (targetUrl: string) =>
   Effect.gen(function* () {
-    let currentUrl = url;
+    let currentUrl = targetUrl;
     let redirectCount = 0;
     const maxRedirects = 5;
     let status = 0;
     let body = "";
-    let finalUrl = url;
+    let finalUrl = targetUrl;
 
     while (true) {
       const request = HttpClientRequest.get(currentUrl).pipe(
@@ -187,11 +235,31 @@ const fetchPageContent = (url: string) =>
       }
 
       body = yield* response.text;
-      finalUrl = currentUrl;
+      const respUrl = (response as any).url || (response as any).source?.url;
+      if (respUrl && typeof respUrl === "string" && respUrl.length > 0) {
+        finalUrl = respUrl;
+      } else {
+        finalUrl = currentUrl;
+      }
       break;
     }
 
     return { body, finalUrl, status };
+  });
+
+const fetchPageContent = (url: string) =>
+  Effect.gen(function* () {
+    if (url.startsWith("http://")) {
+      const httpsUrl = "https://" + url.slice("http://".length);
+      const httpsAttempt = yield* fetchSingleUrl(httpsUrl).pipe(
+        Effect.map((res) => ({ success: true as const, res })),
+        Effect.catch(() => Effect.succeed({ success: false as const, res: null }))
+      );
+      if (httpsAttempt.success && httpsAttempt.res && httpsAttempt.res.status >= 200 && httpsAttempt.res.status < 300) {
+        return httpsAttempt.res;
+      }
+    }
+    return yield* fetchSingleUrl(url);
   });
 
 export const FetcherAgent = defineAgent({
@@ -229,18 +297,26 @@ export const FetcherAgent = defineAgent({
           );
 
           const prefixes = yield* config.urlProcessing.normalizePrefixes;
-          const normalizedFinalUrl = normalizeUrlDomain(finalUrl, prefixes);
+          let normalizedFinalUrl = normalizeUrlDomain(finalUrl, prefixes);
           const normalizedUrl = normalizeUrlDomain(url, prefixes);
+
+          const urlStr = normalizedUrl.toString();
+          const { title, extractedText, extractedLinks, canonicalUrl } = extractContent(normalizedFinalUrl.toString(), body, activeFilters);
+
+          if (canonicalUrl) {
+            try {
+              normalizedFinalUrl = normalizeUrlDomain(canonicalUrl, prefixes);
+            } catch {
+              // ignore invalid canonical URL
+            }
+          }
 
           const domain = normalizedFinalUrl.hostname;
           const finalUrlStr = normalizedFinalUrl.toString();
-          const urlStr = normalizedUrl.toString();
-
-          const { title, extractedLinks } = extractContent(finalUrlStr, body, activeFilters);
 
           yield* sql`
             INSERT INTO page_contents (url, domain, title, http_status, raw_html, extracted_text)
-            VALUES (${finalUrlStr}, ${domain}, ${title}, ${status}, ${body}, ${body})
+            VALUES (${finalUrlStr}, ${domain}, ${title}, ${status}, ${body}, ${extractedText})
             ON CONFLICT (url) DO UPDATE SET
               domain = EXCLUDED.domain,
               title = EXCLUDED.title,
@@ -251,11 +327,10 @@ export const FetcherAgent = defineAgent({
           `;
 
           if (finalUrlStr !== urlStr) {
-            const originalDomain = normalizedUrl.hostname;
             yield* sql`
-              INSERT INTO page_contents (url, domain, title, http_status)
-              VALUES (${urlStr}, ${originalDomain}, 'Redirect', ${status})
-              ON CONFLICT (url) DO NOTHING
+              INSERT INTO url_redirects (from_url, to_url)
+              VALUES (${urlStr}, ${finalUrlStr})
+              ON CONFLICT (from_url) DO UPDATE SET to_url = EXCLUDED.to_url
             `;
           }
 

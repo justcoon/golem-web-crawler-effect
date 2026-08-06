@@ -249,11 +249,17 @@ const filterUncrawledUrls = (urls: readonly string[], cacheTtlSeconds: number | 
         SELECT url FROM page_contents
         WHERE url = ANY(${Pg.array(urls)})
           AND saved_at > CURRENT_TIMESTAMP - CAST(${cacheTtlSeconds} || ' second' AS INTERVAL)
+        UNION
+        SELECT from_url AS url FROM url_redirects
+        WHERE from_url = ANY(${Pg.array(urls)})
       `;
     } else {
       crawledRows = yield* sql<{ url: string }>`
         SELECT url FROM page_contents
         WHERE url = ANY(${Pg.array(urls)})
+        UNION
+        SELECT from_url AS url FROM url_redirects
+        WHERE from_url = ANY(${Pg.array(urls)})
       `;
     }
 
