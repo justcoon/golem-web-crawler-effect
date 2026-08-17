@@ -70,16 +70,24 @@ function partsVal(trimmed: string, colonIdx: number): string {
 const fetchRobotsTxt = (domain: string) =>
   Effect.gen(function* () {
     const robotsUrl = `https://${domain}/robots.txt`;
+    yield* Effect.logDebug(`Fetching robots.txt from ${robotsUrl}`);
     const response = yield* HttpClient.execute(HttpClientRequest.get(robotsUrl)).pipe(
       Effect.provide(FetchHttpClient.layer)
     );
     if (response.status === 200) {
       const text = yield* response.text;
-      return parseRobotsTxt(text);
+      const parsed = parseRobotsTxt(text);
+      yield* Effect.logDebug(`Successfully fetched robots.txt`);
+      return parsed;
     }
+    yield* Effect.logWarning(`HTTP ${response.status} returned when fetching robots.txt`);
     return { disallowed: [], crawlDelay: null };
   }).pipe(
-    Effect.catch(() => Effect.succeed({ disallowed: [], crawlDelay: null }))
+    Effect.catch((err) =>
+      Effect.logWarning(`Failed to fetch robots.txt: ${String(err)}`).pipe(
+        Effect.map(() => ({ disallowed: [], crawlDelay: null }))
+      )
+    )
   );
 
 function getPriorityBucket(priority: number): "High" | "Medium" | "Low" {
@@ -356,9 +364,11 @@ export const DomainCrawlerAgent = defineAgent({
             try {
               const parsed = new URL(u.url);
               if (parsed.hostname !== domainName) {
+                yield* Effect.logError(`URL domain mismatch: expected ${domainName}, got ${parsed.hostname}`);
                 return yield* Effect.die(new Error(`URL does not belong to domain: ${u.url}`));
               }
             } catch {
+              yield* Effect.logError(`Invalid URL format: ${u.url}`);
               return yield* Effect.die(new Error(`Invalid URL format: ${u.url}`));
             }
           }
@@ -367,7 +377,10 @@ export const DomainCrawlerAgent = defineAgent({
           yield* Ref.update(state, (s) => addUrlsToState(s, urls));
           const after = yield* Ref.get(state);
 
-          if (before.status === "Inactive" && (after.queues.High.length > 0 || after.queues.Medium.length > 0 || after.queues.Low.length > 0)) {
+          const totalQueued = after.queues.High.length + after.queues.Medium.length + after.queues.Low.length;
+          yield* Effect.logInfo(`Enqueued ${urls.length} URL(s)`);
+
+          if (before.status === "Inactive" && totalQueued > 0) {
             yield* scheduleNextStep();
           }
         }).pipe(Effect.orDie),
@@ -375,13 +388,22 @@ export const DomainCrawlerAgent = defineAgent({
       getState: () => Ref.get(state).pipe(Effect.orDie),
 
       setDelay: ({ delayMs }) =>
-        Ref.update(state, (s) => ({ ...s, politenessDelayMs: delayMs })).pipe(Effect.orDie),
+        Ref.update(state, (s) => ({ ...s, politenessDelayMs: delayMs })).pipe(
+          Effect.tap(() => Effect.logInfo(`Updated politeness delay to ${delayMs}ms`)),
+          Effect.orDie
+        ),
 
       setCrossDomainPolicy: ({ policy }) =>
-        Ref.update(state, (s) => ({ ...s, crossDomainPolicy: policy })).pipe(Effect.orDie),
+        Ref.update(state, (s) => ({ ...s, crossDomainPolicy: policy })).pipe(
+          Effect.tap(() => Effect.logInfo(`Updated cross-domain policy to ${policy}`)),
+          Effect.orDie
+        ),
 
       removeCrossDomainPolicy: () =>
-        Ref.update(state, (s) => ({ ...s, crossDomainPolicy: null })).pipe(Effect.orDie),
+        Ref.update(state, (s) => ({ ...s, crossDomainPolicy: null })).pipe(
+          Effect.tap(() => Effect.logInfo(`Removed cross-domain policy override`)),
+          Effect.orDie
+        ),
 
       processNext: () =>
         Effect.gen(function* () {
@@ -393,8 +415,8 @@ export const DomainCrawlerAgent = defineAgent({
           }
 
           if (stateVal.robotsDisallowed === null) {
-            yield* Effect.logInfo(`Fetching robots.txt for domain: ${stateVal.domain}`);
             const { disallowed, crawlDelay } = yield* fetchRobotsTxt(stateVal.domain);
+            yield* Effect.logDebug(`Loaded robots.txt with ${disallowed.length} disallowed rule(s)`);
             yield* Ref.update(state, (s) => {
               const nextState = { ...s, robotsDisallowed: disallowed };
               if (crawlDelay !== null) {
@@ -415,7 +437,7 @@ export const DomainCrawlerAgent = defineAgent({
           if (poppedUrl) {
             const target: PrioritizedUrl = poppedUrl;
             if (!isAllowedByRobots(stateVal, target.url)) {
-              yield* Effect.logInfo(`URL disallowed by robots.txt, skipping: ${target.url}`);
+              yield* Effect.logWarning(`URL disallowed by robots.txt: ${target.url}`);
               yield* scheduleNextStep();
               return;
             }
@@ -433,6 +455,8 @@ export const DomainCrawlerAgent = defineAgent({
 
             if (fetchResultResult._tag === "Right") {
               const result = fetchResultResult.value;
+              yield* Effect.logDebug(`Fetched ${result.url} [HTTP ${result.status}, links: ${result.extractedLinks.length}]`);
+
               yield* Ref.update(state, (s) => ({
                 ...s,
                 processedCount: s.processedCount + 1,
@@ -486,13 +510,15 @@ export const DomainCrawlerAgent = defineAgent({
                     const allowed = prioritizedUrls.filter((u) => isAllowedByRobots(s, u.url));
                     return addUrlsToState(s, allowed);
                   });
+                  yield* Effect.logDebug(`Re-queued ${prioritizedUrls.length} URL(s) for local domain`);
                 } else {
+                  yield* Effect.logDebug(`Dispatched ${prioritizedUrls.length} URL(s) to ${domain}`);
                   const client = yield* DomainCrawlerAgent.client.get({ domainName: domain });
                   yield* client.enqueue.trigger({ urls: prioritizedUrls });
                 }
               }
             } else {
-              yield* Effect.logError(`Failed to fetch URL ${target.url}: ${JSON.stringify(fetchResultResult.error)}`);
+              yield* Effect.logError(`Failed to fetch ${target.url}: ${JSON.stringify(fetchResultResult.error)}`);
               yield* Ref.update(state, (s) => ({
                 ...s,
                 errorCount: s.errorCount + 1,

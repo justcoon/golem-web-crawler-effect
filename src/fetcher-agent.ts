@@ -189,7 +189,7 @@ function extractContent(baseUrl: string, body: string, activeFilters: readonly {
   return { title, extractedText, extractedLinks, canonicalUrl };
 }
 
-const fetchSingleUrl = (targetUrl: string) =>
+const fetchPageContent = (targetUrl: string) =>
   Effect.gen(function* () {
     let currentUrl = targetUrl;
     let redirectCount = 0;
@@ -245,21 +245,6 @@ const fetchSingleUrl = (targetUrl: string) =>
     }
 
     return { body, finalUrl, status };
-  });
-
-const fetchPageContent = (url: string) =>
-  Effect.gen(function* () {
-    if (url.startsWith("http://")) {
-      const httpsUrl = "https://" + url.slice("http://".length);
-      const httpsAttempt = yield* fetchSingleUrl(httpsUrl).pipe(
-        Effect.map((res) => ({ success: true as const, res })),
-        Effect.catch(() => Effect.succeed({ success: false as const, res: null }))
-      );
-      if (httpsAttempt.success && httpsAttempt.res && httpsAttempt.res.status >= 200 && httpsAttempt.res.status < 300) {
-        return httpsAttempt.res;
-      }
-    }
-    return yield* fetchSingleUrl(url);
   });
 
 export const FetcherAgent = defineAgent({
